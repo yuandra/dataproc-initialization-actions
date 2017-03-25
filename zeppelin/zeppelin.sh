@@ -23,27 +23,53 @@ set -x -e
 ROLE="$(/usr/share/google/get_metadata_value attributes/dataproc-role)"
 INTERPRETER_FILE='/etc/zeppelin/conf/interpreter.json'
 ZEPPELIN_PORT="$(/usr/share/google/get_metadata_value attributes/zeppelin-port || true)"
+VERSION='0.7.0'
+ZEPPELIN_CONF_STORAGE = 'Put the google storage bucket where you store the initialization script here'
+ZEPPELIN_DIR='/etc/zeppelin'
 
 if [[ "${ROLE}" == 'Master' ]]; then
-  # Install zeppelin. Don't mind if it fails to start the first time.
-  apt-get install -y zeppelin || dpkg -l zeppelin
 
-  for i in {1..6}; do
+  # get zeppelin latest versions
+  if [[ -r "zeppelin-${VERSION}-bin-all.tgz" ]]; then
+    break
+  else
+    wget http://apache.mesi.com.ar/zeppelin/zeppelin-${VERSION}/zeppelin-${VERSION}-bin-all.tgz
+  fi
+
+  #extract
+  tar -zxf zeppelin-${VERSION}-bin-all.tgz
+
+  #make symbolic Link
+  mkdir /var/run/zeppelin
+  mkdir /var/lib/zeppelin
+  mkdir /var/lib/zeppelin/webapps
+  mkdir /var/lib/zeppelin/notebook
+
+  mv zeppelin-${VERSION}-bin-all /etc/zeppelin
+  #ln -s ${ZEPPELIN_DIR}/conf/ /etc/zeppelin/conf
+
+  gsutil cp gs://${ZEPPELIN_CONF_STORAGE}/zeppelin-env.sh /etc/zeppelin/conf
+
+  #start and stop zeppelin
+  ${ZEPPELIN_DIR}/bin/zeppelin-daemon.sh start
+
+  for i in {1..20}; do
     if [[ -r "${INTERPRETER_FILE}" ]]; then
       break
     else
       sleep 10
     fi
   done
-  # Ideally we would use Zeppelin's REST API, but it is difficult, especially
-  # between versions. So sed the JSON file.
-  service zeppelin stop
+
+  ${ZEPPELIN_DIR}/bin/zeppelin-daemon.sh stop
+
+
   # Set spark.yarn.isPython to fix Zeppelin pyspark in Dataproc 1.0.
   sed -i 's/\(\s*\)"spark\.app\.name[^,}]*/&,\n\1"spark.yarn.isPython": "true"/' \
       "${INTERPRETER_FILE}"
 
-  # Link in hive configuration.
-  ln -s /etc/hive/conf/hive-site.xml /etc/zeppelin/conf
+  # Link in hive configuration
+  ln -s /etc/hive/conf/hive-site.xml /etc/zeppelin/conf/
 
   if [[ -n "${ZEPPELIN_PORT}" ]]; then
     echo "export ZEPPELIN_PORT=${ZEPPELIN_PORT}" \
@@ -51,8 +77,8 @@ if [[ "${ROLE}" == 'Master' ]]; then
   fi
 
   # Install R libraries and configure BigQuery for Zeppelin 0.6.1+
-  ZEPPELIN_VERSION=$(dpkg-query --showformat='${Version}' --show zeppelin)
-  if dpkg --compare-versions "${ZEPPELIN_VERSION}" '>=' 0.6.1; then
+  #ZEPPELIN_VERSION=$(dpkg-query --showformat='${Version}' --show zeppelin)
+  if "${VERSION}" '>=' 0.6.1; then
     # Set BigQuery project ID if present.
     PROJECT=$(/usr/share/google/get_metadata_value ../project/project-id)
     sed -i "s/\(\"zeppelin.bigquery.project_id\"\)[^,}]*/\1: \"${PROJECT}\"/" \
@@ -61,25 +87,25 @@ if [[ "${ROLE}" == 'Master' ]]; then
     # TODO(pmkc): Add googlevis to Zeppelin Package recommendations
     apt-get install -y r-cran-googlevis
 
-## Uncomment here to compile and install 'mplot' and 'rCharts'.
-#    # Install compile dependencies
-#    apt-get install -y \
-#      r-cran-doparallel r-cran-httr r-cran-memoise r-cran-openssl \
-#      r-cran-rcurl r-cran-plyr r-cran-shiny r-cran-glmnet r-cran-data.table \
-#      libssl-dev libcurl4-openssl-dev
-#
-#    cat << EOF > install_script.r
-#options('Ncpus'=10, repos = 'http://cran.us.r-project.org')
-#install.packages('devtools')
-#require('devtools')
-## Install version 0.7.7 to avoid dependency on glmulti and RJava
-#install_version('mplot', version = '0.7.7', upgrade_dependencies = FALSE)
-#install_github('ramnathv/rCharts', upgrade_dependencies = FALSE)
-#update.packages('ggplot', ask = FALSE)
-#EOF
-#    R -f install_script.r
+  ## Uncomment here to compile and install 'mplot' and 'rCharts'.
+  #    # Install compile dependencies
+  #    apt-get install -y \
+  #      r-cran-doparallel r-cran-httr r-cran-memoise r-cran-openssl \
+  #      r-cran-rcurl r-cran-plyr r-cran-shiny r-cran-glmnet r-cran-data.table \
+  #      libssl-dev libcurl4-openssl-dev
+  #
+  #    cat << EOF > install_script.r
+  #options('Ncpus'=10, repos = 'http://cran.us.r-project.org')
+  #install.packages('devtools')
+  #require('devtools')
+  ## Install version 0.7.7 to avoid dependency on glmulti and RJava
+  #install_version('mplot', version = '0.7.7', upgrade_dependencies = FALSE)
+  #install_github('ramnathv/rCharts', upgrade_dependencies = FALSE)
+  #update.packages('ggplot', ask = FALSE)
+  #EOF
+  #    R -f install_script.r
   fi
 
-  # Restart Zeppelin
-  service zeppelin start
+  ${ZEPPELIN_DIR}/bin/zeppelin-daemon.sh start
+
 fi
